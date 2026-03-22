@@ -23,7 +23,9 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 DEFAULT_MODEL_ID = "sentence-transformers/all-MiniLM-L6-v2"
 DEFAULT_CSV = Path("es_ar_backtranslated_sample_20.csv")
-DISPLAY_WIDTH = 60
+SNIPPET_WIDTH = 60
+COL_IDX = 4
+COL_SIM = 10
 # API scores are in [0, 1] but may overshoot slightly in float32 (e.g. 1.0000001).
 _SIMILARITY_TOLERANCE = 1e-3
 
@@ -182,8 +184,39 @@ def evaluate_pairs(pairs: list[tuple[str, str]]) -> list[dict[str, Any]]:
     return results
 
 
-def _truncate(text: str, max_len: int = DISPLAY_WIDTH) -> str:
-    """Single-line display truncation with an ellipsis when needed."""
+def demo_sanity_checks() -> None:
+    """
+    Run two live Inference API calls to verify :func:`compute_similarity_pair` is not
+    returning hard-coded values. Not mocked.
+    """
+    try:
+        same = compute_similarity_pair("Hello world", "Hello world")
+        assert same > 0.8, f"expected similarity > 0.8 for identical text, got {same!r}"
+    except AssertionError as exc:
+        print(
+            "Sanity check failed: identical strings "
+            '("Hello world", "Hello world") should score above 0.8. '
+            f"Details: {exc}"
+        )
+        raise
+
+    try:
+        diff = compute_similarity_pair(
+            "Hello world",
+            "This sentence is about something else entirely",
+        )
+        assert diff < 0.8, f"expected similarity < 0.8 for unrelated text, got {diff!r}"
+    except AssertionError as exc:
+        print(
+            'Sanity check failed: unrelated strings ("Hello world" vs long unrelated '
+            "sentence) should score below 0.8. "
+            f"Details: {exc}"
+        )
+        raise
+
+
+def _snippet(text: str, max_len: int = SNIPPET_WIDTH) -> str:
+    """Replace newlines and runs of whitespace with single spaces; truncate to ``max_len``."""
     single = " ".join(text.split())
     if len(single) <= max_len:
         return single
@@ -215,49 +248,43 @@ def main() -> None:
 
     show_gemini = any(gemini_by_index.get(i) is not None for i in range(len(rows)))
 
-    print(f"Average HF similarity: {average:.3f}\n")
+    print(f"Average HF similarity: {average:.1f}\n")
+
+    header = (
+        f"{'idx':<{COL_IDX}} | {'similarity':>{COL_SIM}} | "
+        f"{'source_snippet':<{SNIPPET_WIDTH}} | "
+        f"{'backtranslation_snippet':<{SNIPPET_WIDTH}}"
+    )
+    rule = (
+        f"{'-' * COL_IDX} | {'-' * COL_SIM} | "
+        f"{'-' * SNIPPET_WIDTH} | {'-' * SNIPPET_WIDTH}"
+    )
     if show_gemini:
-        print(
-            f"{'idx':>4}  "
-            f"{'source':<{DISPLAY_WIDTH}}  "
-            f"{'backtranslation':<{DISPLAY_WIDTH}}  "
-            f"{'hf_sim':>7}  "
-            f"{'gemini':>8}"
-        )
-        print(
-            "-" * (4 + 2 + DISPLAY_WIDTH + 2 + DISPLAY_WIDTH + 2 + 7 + 2 + 8)
-        )
-    else:
-        print(
-            f"{'idx':>4}  "
-            f"{'source':<{DISPLAY_WIDTH}}  "
-            f"{'backtranslation':<{DISPLAY_WIDTH}}  "
-            f"{'sim':>6}"
-        )
-        print("-" * (4 + 2 + DISPLAY_WIDTH + 2 + DISPLAY_WIDTH + 2 + 6))
+        header += f" | {'gemini':>8}"
+        rule += " | " + "-" * 8
+
+    print(header)
+    print(rule)
 
     for row in sorted(rows, key=lambda r: r["similarity"]):
         idx = row["index"]
-        src = _truncate(row["source"])
-        bt = _truncate(row["backtranslation"])
+        src = _snippet(row["source"])
+        bt = _snippet(row["backtranslation"])
         sim = row["similarity"]
-        g = gemini_by_index.get(idx)
+        sim_fmt = format(sim, f">{COL_SIM}.1f")
+        line = (
+            f"{idx:<{COL_IDX}} | {sim_fmt} | "
+            f"{src:<{SNIPPET_WIDTH}} | {bt:<{SNIPPET_WIDTH}}"
+        )
         if show_gemini:
+            g = gemini_by_index.get(idx)
             g_str = f"{g:.2f}" if g is not None else "—"
-            print(
-                f"{idx:4d}  "
-                f"{src:<{DISPLAY_WIDTH}}  "
-                f"{bt:<{DISPLAY_WIDTH}}  "
-                f"{sim:7.3f}  "
-                f"{g_str:>8}"
-            )
-        else:
-            print(
-                f"{idx:4d}  "
-                f"{src:<{DISPLAY_WIDTH}}  "
-                f"{bt:<{DISPLAY_WIDTH}}  "
-                f"{sim:6.3f}"
-            )
+            line += f" | {g_str:>8}"
+        print(line)
+
+    print()
+    demo_sanity_checks()
+    print("Sanity checks passed (live Inference API).")
 
 
 if __name__ == "__main__":
